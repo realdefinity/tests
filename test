@@ -1,139 +1,157 @@
-local tick = tick
-local taskWait = task.wait
-local sqrt = math.sqrt
-local ceil = math.ceil
-local floor = math.floor
-local sort = table.sort
-local huge = math.huge
+local tick, taskWait, sqrt, ceil, floor, sort, huge = tick, task.wait, math.sqrt, math.ceil, math.floor, table.sort, math.huge
+
+local function measureTickOverhead(iterations)
+	local totalOverhead = 0
+	for _ = 1, iterations do
+		local a = tick()
+		local b = tick()
+		totalOverhead = totalOverhead + (b - a)
+	end
+	return totalOverhead / iterations
+end
+
+local function sampleCode()
+	local total = 0
+	for i = 1, 100 do
+		total = total + sqrt(i)
+	end
+	return total
+end
+
+local function runWarmup(iterations)
+	for _ = 1, iterations do
+		sampleCode()
+	end
+end
+
+local function runTest(iterations, tickOverhead, progressInterval)
+	local times = table.create(iterations)
+	local testStartTime = tick()
+	for i = 1, iterations do
+		local t1 = tick()
+		sampleCode()
+		local t2 = tick()
+		local dt = t2 - t1 - 2 * tickOverhead
+		times[i] = dt > 0 and dt or 0
+		if i % progressInterval == 0 then
+			local percent = floor(i / iterations * 100)
+			print(("✅ Progress: %d%%"):format(percent))
+		end
+	end
+	local testEndTime = tick()
+	return times, testEndTime - testStartTime
+end
+
+local function computeStats(times, iterations)
+	local totalTime = 0
+	local minTime = huge
+	local maxTime = 0
+	for i = 1, iterations do
+		local t = times[i]
+		totalTime = totalTime + t
+		if t < minTime then minTime = t end
+		if t > maxTime then maxTime = t end
+	end
+	local avgTime = totalTime / iterations
+	sort(times)
+	local medianTime = iterations % 2 == 0 and (times[iterations/2] + times[iterations/2 + 1]) / 2 or times[floor(iterations/2) + 1]
+	local function getPercentile(p)
+		local index = floor(iterations * p)
+		return times[index > 0 and index or 1]
+	end
+	local p90Time = getPercentile(0.90)
+	local p95Time = getPercentile(0.95)
+	local p99Time = getPercentile(0.99)
+	local p999Time = getPercentile(0.999)
+	local sumSqDiff = 0
+	local sumAbsDiff = 0
+	for i = 1, iterations do
+		local diff = times[i] - avgTime
+		sumSqDiff = sumSqDiff + diff * diff
+		sumAbsDiff = sumAbsDiff + math.abs(diff)
+	end
+	local stdev = sqrt(sumSqDiff / iterations)
+	local mad = sumAbsDiff / iterations
+	local coeffVariation = avgTime > 0 and (stdev / avgTime * 100) or 0
+	return avgTime, medianTime, minTime, maxTime, p90Time, p95Time, p99Time, p999Time, stdev, mad, coeffVariation
+end
+
+local function formatTime(t)
+	if t < 0.000001 then
+		return (t * 1000000000) .. " nanoseconds"
+	elseif t < 0.001 then
+		return ceil(t * 1000000) .. " microseconds"
+	elseif t < 1 then
+		return ceil(t * 1000) .. " ms"
+	else
+		return ("%0.3f s"):format(t)
+	end
+end
+
+local function printDivider()
+	print(("="):rep(40))
+end
 
 local executorName = (identifyexecutor and identifyexecutor() or "Unknown Executor")
 print("✅ Detected Executor: " .. executorName)
 taskWait(0.3)
 
-local function measureTickOverhead(iterations)
-    local totalOverhead = 0
-    for i = 1, iterations do
-        local a = tick()
-        local b = tick()
-        totalOverhead = totalOverhead + (b - a)
-    end
-    return totalOverhead / iterations
-end
-
-local overheadIterations = 500000  -- increased for even more accuracy
+local overheadIterations = 100000
 local tickOverhead = measureTickOverhead(overheadIterations)
-print("✅ Tick() overhead per call (" .. overheadIterations .. " iterations): " .. tickOverhead .. " seconds")
+print(("✅ Tick() overhead per call (%d iterations): %.9f seconds"):format(overheadIterations, tickOverhead))
 taskWait(0.3)
-
-local function sampleCode()
-    local total = 0
-    for i = 1, 100 do
-        total = total + sqrt(i)
-    end
-    return total
-end
 
 local warmupIterations = 1000
-print("✅ Warming up (" .. warmupIterations .. " iterations)...")
+print(("✅ Warming up with %d iterations..."):format(warmupIterations))
+runWarmup(warmupIterations)
 taskWait(0.3)
-for i = 1, warmupIterations do
-    sampleCode()
-end
 
 local iterations = 100000
-print("✅ Measuring performance over " .. iterations .. " iterations...")
+print(("✅ Measuring performance over %d iterations..."):format(iterations))
+taskWait(0.3)
+local progressInterval = floor(iterations / 10)
+local success, ret1, ret2 = pcall(function() return runTest(iterations, tickOverhead, progressInterval) end)
+if not success then
+	print("❌ Test failed to complete! Reason: " .. ret1)
+	return
+end
+local times, totalTestTime = ret1, ret2
 taskWait(0.3)
 
-local times = {}
-local testStartTime = tick()
-
-for i = 1, iterations do
-    local t1 = tick()
-    sampleCode()
-    local t2 = tick()
-    local dt = t2 - t1 - 2 * tickOverhead
-    times[i] = dt > 0 and dt or 0
-
-    if i % (iterations / 10) == 0 then
-        print("   Progress: " .. floor(i / iterations * 100) .. "%")
-    end
-end
-
-local testEndTime = tick()
-local totalTestTime = testEndTime - testStartTime
-
-print("✅ Calculating statistics...")
+local avgTime, medianTime, minTime, maxTime, p90Time, p95Time, p99Time, p999Time, stdev, mad, coeffVariation = computeStats(times, iterations)
 taskWait(0.3)
 
-local totalTime, minTime, maxTime = 0, huge, 0
-for i = 1, iterations do
-    local t = times[i]
-    totalTime = totalTime + t
-    if t < minTime then minTime = t end
-    if t > maxTime then maxTime = t end
-end
-local avgTime = totalTime / iterations
-
-sort(times)
-local medianTime
-if iterations % 2 == 0 then
-    medianTime = (times[iterations/2] + times[iterations/2 + 1]) / 2
-else
-    medianTime = times[floor(iterations/2) + 1]
-end
-
-local p90Index = floor(iterations * 0.90)
-local p95Index = floor(iterations * 0.95)
-local p99Index = floor(iterations * 0.99)
-local p999Index = floor(iterations * 0.999)
-local p90Time = times[p90Index]
-local p95Time = times[p95Index]
-local p99Time = times[p99Index]
-local p999Time = times[p999Index]
-
-local sumSqDiff = 0
-for i = 1, iterations do
-    local diff = times[i] - avgTime
-    sumSqDiff = sumSqDiff + diff * diff
-end
-local stdev = math.sqrt(sumSqDiff / iterations)
-
-local sumAbsDiff = 0
-for i = 1, iterations do
-    sumAbsDiff = sumAbsDiff + math.abs(times[i] - avgTime)
-end
-local mad = sumAbsDiff / iterations
-local coeffVariation = avgTime > 0 and (stdev / avgTime * 100) or 0
-
-local function formatTime(t)
-    if t < 0.001 then
-        return ceil(t * 1000000) .. " microseconds"
-    elseif t < 1 then
-        return ceil(t * 1000) .. " milliseconds"
-    else
-        return string.format("%.3f", t) .. " seconds"
-    end
-end
-
-print("============================================")
-print("                Results")
-print("============================================")
+printDivider()
+print("✅ RESULTS")
+printDivider()
 taskWait(0.3)
-print("Average Time:             " .. formatTime(avgTime))
-print("Median Time:              " .. formatTime(medianTime))
-print("Minimum Time:             " .. formatTime(minTime))
-print("Maximum Time:             " .. formatTime(maxTime))
-print("90th Percentile:          " .. formatTime(p90Time))
-print("95th Percentile:          " .. formatTime(p95Time))
-print("99th Percentile:          " .. formatTime(p99Time))
-print("99.9th Percentile:        " .. formatTime(p999Time))
-print("Standard Deviation:       " .. formatTime(stdev))
-print("Mean Absolute Deviation:  " .. formatTime(mad))
-print("Coefficient of Variation: " .. string.format("%.2f", coeffVariation) .. " %")
-print("Total Test Duration:      " .. string.format("%.3f", totalTestTime) .. " seconds")
-print("Iterations per Second:    " .. string.format("%.2f", iterations / totalTestTime))
+print("✅ Average Time:             " .. formatTime(avgTime))
 taskWait(0.3)
-print("✅ Test complete.")
+print("✅ Median Time:              " .. formatTime(medianTime))
 taskWait(0.3)
-print("Test made by notdefinity")
-print("join the discord if you want =D https://discord.gg/qeFQ57eqtj")
+print("✅ Minimum Time:             " .. formatTime(minTime))
+taskWait(0.3)
+print("✅ Maximum Time:             " .. formatTime(maxTime))
+taskWait(0.3)
+print("✅ 90th Percentile:          " .. formatTime(p90Time))
+taskWait(0.3)
+print("✅ 95th Percentile:          " .. formatTime(p95Time))
+taskWait(0.3)
+print("✅ 99th Percentile:          " .. formatTime(p99Time))
+taskWait(0.3)
+print("✅ 99.9th Percentile:        " .. formatTime(p999Time))
+taskWait(0.3)
+print("✅ Standard Deviation:       " .. formatTime(stdev))
+taskWait(0.3)
+print("✅ Mean Absolute Deviation:  " .. formatTime(mad))
+taskWait(0.3)
+print(("✅ Coefficient of Variation: %.2f%%"):format(coeffVariation))
+taskWait(0.3)
+print(("✅ Total Test Duration:      %.3f s"):format(totalTestTime))
+taskWait(0.3)
+print(("✅ Iterations per Second:    %.2f"):format(iterations / totalTestTime))
+printDivider()
+taskWait(0.3)
+print("✅ Test complete. Enjoy your results!")
+taskWait(0.3)
+print("✅ Test made by notdefinity - Join the Discord: https://discord.gg/qeFQ57eqtj")
