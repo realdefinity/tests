@@ -1,0 +1,125 @@
+local tick, taskWait, ceil, floor, pairs, ipairs, table_sort = tick, task.wait, math.ceil, math.floor, pairs, ipairs, table.sort
+
+local config = {
+	notificationDuration = 5,
+	waitTime = 0.3,
+}
+
+local function log(msg)
+	print(msg)
+	taskWait(config.waitTime)
+end
+
+local function sendNotification(title, text, duration)
+	local StarterGui = game:GetService("StarterGui")
+	StarterGui:SetCore("SendNotification", {
+		Title = title,
+		Text = text,
+		Duration = duration or config.notificationDuration,
+	})
+end
+
+local function testSandboxIsolationDetailed()
+	local allowed = {
+		math = math,
+		string = string,
+		table = table,
+		ipairs = ipairs,
+		pairs = pairs,
+		tonumber = tonumber,
+		tostring = tostring,
+		print = print,
+		error = error,
+		next = next,
+		pcall = pcall,
+		xpcall = xpcall,
+		select = select,
+		unpack = unpack,
+		utf8 = utf8,
+	}
+	local sandboxEnv = {}
+	for k, v in pairs(allowed) do
+		sandboxEnv[k] = v
+	end
+	setmetatable(sandboxEnv, { __index = function() return nil end })
+
+	local testKeys = {
+		"game", "os", "debug", "loadstring", "getfenv", "setfenv",
+		"require", "script", "workspace", "getmetatable", "setmetatable",
+		"tick", "wait", "task"
+	}
+	
+	local code = [[
+		local report = {}
+		local keysToCheck = ...
+		for i, key in ipairs(keysToCheck) do
+			report[key] = _G[key]
+		end
+		local globals = {}
+		for k, v in pairs(_G) do
+			table.insert(globals, k)
+		end
+		table.sort(globals)
+		return { report = report, globals = globals }
+	]]
+	local chunk, err = loadstring(code)
+	if not chunk then return nil, "Loadstring error: " .. err end
+	setfenv(chunk, sandboxEnv)
+	local success, result = pcall(chunk, testKeys)
+	if not success then return nil, "Execution error: " .. result end
+	return result, sandboxEnv, testKeys
+end
+
+local function main()
+	log("✅ Starting Detailed Sandbox Security & Isolation Test...")
+	sendNotification("✅ Sandbox Security Test", "Test started. Check console for details.", config.notificationDuration)
+	local result, sandboxEnv, testKeys = testSandboxIsolationDetailed()
+	if not result then
+		log("❌ Test failed: " .. tostring(sandboxEnv))
+		sendNotification("❌ Sandbox Security Test", "Test failed. Check console for details.", config.notificationDuration)
+		return
+	end
+	
+	local report = result.report
+	local globals = result.globals
+	local pass = true
+
+	log("✅ Detailed Sandbox Report:")
+	for _, key in ipairs(testKeys) do
+		if report[key] ~= nil then
+			log("❌ Disallowed key '" .. key .. "' is accessible (" .. type(report[key]) .. ")")
+			pass = false
+		else
+			log("✅ Key '" .. key .. "' is blocked as expected.")
+		end
+	end
+
+	local expectedGlobals = {}
+	for k, _ in pairs(sandboxEnv) do
+		table.insert(expectedGlobals, k)
+	end
+	table_sort(expectedGlobals)
+	
+	log("✅ Expected Globals in Sandbox:")
+	for _, key in ipairs(expectedGlobals) do
+		log("   - " .. key)
+	end
+
+	log("✅ Reported Globals from _G:")
+	for _, key in ipairs(globals) do
+		log("   - " .. key)
+	end
+
+	if pass then
+		log("✅ Sandbox Security Test: PASS")
+		sendNotification("✅ Sandbox Security Test", "Test passed. Check console for details.", config.notificationDuration)
+	else
+		log("❌ Sandbox Security Test: FAIL")
+		sendNotification("❌ Sandbox Security Test", "Test failed. Check console for details.", config.notificationDuration)
+	end
+
+	log("✅ Detailed Sandbox Security & Isolation Test Complete!")
+	log("✅ Made by notdefinity - Join the Discord: https://discord.gg/qeFQ57eqtj")
+end
+
+main()
