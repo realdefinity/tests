@@ -64,8 +64,6 @@ local function shallowEqual(t1, t2)
 	return true
 end
 
--- Tests
-
 test("cache.invalidate", {}, function()
 	local container = Instance.new("Folder")
 	local part = Instance.new("Part", container)
@@ -176,7 +174,6 @@ test("newcclosure", {}, function()
 	assert(iscclosure(cclosure), "New C closure should be a C closure")
 end)
 
--- Console functions
 test("rconsoleclear", {"consoleclear"})
 test("rconsolecreate", {"consolecreate"})
 test("rconsoledestroy", {"consoledestroy"})
@@ -184,7 +181,6 @@ test("rconsoleinput", {"consoleinput"})
 test("rconsoleprint", {"consoleprint"})
 test("rconsolesettitle", {"rconsolename", "consolesettitle"})
 
--- Crypt tests
 test("crypt.base64encode", {"crypt.base64.encode", "crypt.base64_encode", "base64.encode", "base64_encode"}, function()
 	assert(crypt.base64encode("test") == "dGVzdA==", "Base64 encoding failed")
 end)
@@ -229,7 +225,6 @@ test("crypt.hash", {}, function()
 	end
 end)
 
--- Debug tests
 test("debug.getconstant", {}, function()
 	local function sample() print("Hello, world!") end
 	assert(debug.getconstant(sample, 1) == "print", "First constant should be 'print'")
@@ -320,7 +315,6 @@ test("debug.setupvalue", {}, function()
 	assert(sample() == "success", "Failed to set upvalue via debug.setupvalue")
 end)
 
--- Filesystem tests
 if isfolder and makefolder and delfolder then
 	if isfolder(".tests") then delfolder(".tests") end
 	makefolder(".tests")
@@ -395,7 +389,6 @@ end)
 
 test("dofile", {})
 
--- Input tests
 test("isrbxactive", {"isgameactive"}, function()
 	assert(type(isrbxactive()) == "boolean", "isrbxactive did not return a boolean")
 end)
@@ -408,7 +401,6 @@ test("mouse2release", {})
 test("mousemoveabs", {})
 test("mousescroll", {})
 
--- Instances tests
 test("fireclickdetector", {}, function()
 	local detector = Instance.new("ClickDetector")
 	fireclickdetector(detector, 50, "MouseHoverEnter")
@@ -430,6 +422,23 @@ test("getconnections", {}, function()
 		assert(connection[k] ~= nil, "Missing field '" .. k .. "' in connection")
 		assert(type(connection[k]) == typ, "Field '" .. k .. "' is not type " .. typ)
 	end
+end)
+
+test("replicatesignal", {}, function()
+	if type(replicatesignal) ~= "function" then
+		return "replicatesignal is not supported on this executor."
+	end
+	local receivedArgs = {}
+	local bindable = Instance.new("BindableEvent")
+	bindable.Event:Connect(function(...)
+		receivedArgs = {...}
+	end)
+	replicatesignal(bindable, "arg1", 42, { key = "value" })
+	task.wait(0.1)
+	assert(#receivedArgs == 3, "replicatesignal did not fire the event with the correct number of arguments")
+	assert(receivedArgs[1] == "arg1", "First argument mismatch in replicatesignal")
+	assert(receivedArgs[2] == 42, "Second argument mismatch in replicatesignal")
+	assert(type(receivedArgs[3]) == "table" and receivedArgs[3].key == "value", "Third argument mismatch in replicatesignal")
 end)
 
 test("getcustomasset", {}, function()
@@ -490,7 +499,6 @@ end)
 
 test("setrbxclipboard", {})
 
--- Metatable tests
 test("getrawmetatable", {}, function()
 	local mt = { __metatable = "Locked!" }
 	local obj = setmetatable({}, mt)
@@ -539,7 +547,6 @@ test("setreadonly", {}, function()
 	assert(obj.success, "setreadonly did not allow modification of the table")
 end)
 
--- Miscellaneous tests
 test("identifyexecutor", {"getexecutorname"}, function()
 	local name, version = identifyexecutor()
 	assert(type(name) == "string", "identifyexecutor did not return a string for name")
@@ -595,7 +602,6 @@ test("setfpscap", {}, function()
 	return fps60 .. " fps @60 • " .. fps0 .. " fps @0"
 end)
 
--- Scripts tests
 test("getgc", {}, function()
 	local gc = getgc()
 	assert(type(gc) == "table", "getgc did not return a table")
@@ -669,7 +675,6 @@ test("setthreadidentity", {"setidentity", "setthreadcontext"}, function()
 	assert(getthreadidentity() == 3, "setthreadidentity did not set thread identity")
 end)
 
--- Drawing tests
 test("Drawing", {})
 
 test("Drawing.new", {}, function()
@@ -713,7 +718,6 @@ test("cleardrawcache", {}, function()
 	cleardrawcache()
 end)
 
--- WebSocket tests
 test("WebSocket", {})
 
 test("WebSocket.connect", {}, function()
