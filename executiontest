@@ -2,12 +2,12 @@ local tick, taskWait, sqrt, ceil, floor, sort, huge = tick, task.wait, math.sqrt
 
 local config = {
     overheadIterations = 100000,
-    warmupIterations = 10000,  -- Increased for better warmup
-    testIterations = 1000000,  -- More iterations for better accuracy
-    progressInterval = 10000,  -- Fixed interval instead of factor
-    waitTime = 0.1,           -- Reduced wait time
-    gcBeforeTest = true,      -- Add garbage collection control
-    priority = Enum.ThreadPriority.High  -- For supported executors
+    warmupIterations = 10000,
+    testIterations = 1000000,
+    progressInterval = 10000,
+    waitTime = 0.1,
+    gcBeforeTest = true,
+    priority = Enum.ThreadPriority.High
 }
 
 --  logging with timing
