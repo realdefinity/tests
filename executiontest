@@ -1,203 +1,275 @@
 local tick, taskWait, sqrt, ceil, floor, sort, huge = tick, task.wait, math.sqrt, math.ceil, math.floor, table.sort, math.huge
 
 local config = {
-	overheadIterations = 100000,
-	warmupIterations = 1000,
-	testIterations = 100000,
-	progressIntervalFactor = 10,
-	waitTime = 0.3,
+    overheadIterations = 100000,
+    warmupIterations = 10000,  -- Increased for better warmup
+    testIterations = 1000000,  -- More iterations for better accuracy
+    progressInterval = 10000,  -- Fixed interval instead of factor
+    waitTime = 0.1,           -- Reduced wait time
+    gcBeforeTest = true,      -- Add garbage collection control
+    priority = Enum.ThreadPriority.High  -- For supported executors
 }
 
-local function log(message)
-	print(message)
-	taskWait(config.waitTime)
+--  logging with timing
+local function log(message, immediate)
+    print(string.format("[%.4f] %s", tick(), message))
+    if not immediate then taskWait(config.waitTime) end
 end
 
+-- More precise overhead measurement with statistical filtering
 local function measureTickOverhead(iterations)
-	local totalOverhead = 0
-	for i = 1, iterations do
-		local s = tick()
-		local e = tick()
-		totalOverhead = totalOverhead + (e - s)
-	end
-	return totalOverhead / iterations
+    local samples = table.create(iterations)
+    for i = 1, iterations do
+        local s = tick()
+        local e = tick()
+        samples[i] = e - s
+    end
+    
+    -- remove outliers
+    sort(samples)
+    local q1 = samples[floor(iterations*0.25)]
+    local q3 = samples[floor(iterations*0.75)]
+    local iqr = q3 - q1
+    local lowerBound = q1 - 1.5*iqr
+    local upperBound = q3 + 1.5*iqr
+    
+    local total, count = 0, 0
+    for i = 1, iterations do
+        local v = samples[i]
+        if v >= lowerBound and v <= upperBound then
+            total = total + v
+            count = count + 1
+        end
+    end
+    
+    return total / count, samples[1]  -- Return average and minimum
 end
 
-local function sampleCode()
-	local sum = 0
-	for i = 1, 100 do
-		sum = sum + sqrt(i)
-	end
-	return sum
-end
+-- test cases
+local testCases = {
+    {
+        name = "Math Operations",
+        func = function()
+            local sum = 0
+            for i = 1, 100 do
+                sum = sum + sqrt(i) * i^0.5 + i%10
+            end
+            return sum
+        end
+    },
+    {
+        name = "Table Operations",
+        func = function()
+            local t = table.create(100, 0)
+            for i = 1, 100 do
+                t[i] = i
+            end
+            for i = 1, 50 do
+                table.remove(t, 1)
+            end
+            return #t
+        end
+    },
+    {
+        name = "String Manipulation",
+        func = function()
+            local s = ""
+            for i = 1, 100 do
+                s = s .. string.char((i%26)+65)
+            end
+            return #s
+        end
+    }
+}
 
+-- Warmup
 local function runWarmup(iterations)
-	for i = 1, iterations do
-		sampleCode()
-	end
+    log("Phase 1: Basic warmup ("..floor(iterations*0.3).." iterations)", true)
+    for i = 1, iterations*0.3 do
+        testCases[1].func()
+    end
+    
+    log("Phase 2: Full warmup ("..floor(iterations*0.7).." iterations)", true)
+    for i = 1, iterations*0.7 do
+        for _, test in ipairs(testCases) do
+            test.func()
+        end
+    end
 end
 
-local function runTest(iterations, tickOverhead, progressInterval)
-	local times = table.create(iterations)
-	local testStartTime = tick()
-	for i = 1, iterations do
-		local startTime = tick()
-		sampleCode()
-		local endTime = tick()
-		local elapsed = endTime - startTime - 2 * tickOverhead
-		times[i] = elapsed > 0 and elapsed or 0
-		if i % progressInterval == 0 then
-			local percent = floor(i / iterations * 100)
-			log(("✅ Progress: %d%%"):format(percent))
-		end
-	end
-	local testDuration = tick() - testStartTime
-	return times, testDuration
+-- test runner
+local function runTest(testCase, iterations, tickOverhead)
+    local times = table.create(iterations)
+    local testStart = tick()
+    
+    for i = 1, iterations do
+        local start = tick()
+        testCase.func()
+        local elapsed = tick() - start - tickOverhead
+        times[i] = elapsed > 0 and elapsed or 0
+        
+        if i % config.progressInterval == 0 then
+            log(string.format("🏁 %s: %d/%d (%.1f%%)", 
+                testCase.name, i, iterations, i/iterations*100), true)
+        end
+    end
+    
+    return times, tick() - testStart
 end
 
-local function computeStats(times, count)
-	local totalTime, minTime, maxTime = 0, huge, 0
-	for i = 1, count do
-		local t = times[i]
-		totalTime = totalTime + t
-		if t < minTime then minTime = t end
-		if t > maxTime then maxTime = t end
-	end
-	local avgTime = totalTime / count
-	sort(times)
-	local medianTime = count % 2 == 0 and (times[count / 2] + times[count / 2 + 1]) / 2 or times[floor(count / 2) + 1]
-	local function getPercentile(p)
-		local index = floor(count * p)
-		return times[index > 0 and index or 1]
-	end
-	local p90Time = getPercentile(0.90)
-	local p95Time = getPercentile(0.95)
-	local p99Time = getPercentile(0.99)
-	local p999Time = getPercentile(0.999)
-	local sumSqDiff, sumAbsDiff = 0, 0
-	for i = 1, count do
-		local diff = times[i] - avgTime
-		sumSqDiff = sumSqDiff + diff * diff
-		sumAbsDiff = sumAbsDiff + math.abs(diff)
-	end
-	local stdev = sqrt(sumSqDiff / count)
-	local mad = sumAbsDiff / count
-	local coeffVariation = avgTime > 0 and (stdev / avgTime * 100) or 0
-	return {
-		avgTime = avgTime,
-		medianTime = medianTime,
-		minTime = minTime,
-		maxTime = maxTime,
-		p90Time = p90Time,
-		p95Time = p95Time,
-		p99Time = p99Time,
-		p999Time = p999Time,
-		stdev = stdev,
-		mad = mad,
-		coeffVariation = coeffVariation,
-	}
+-- Statistical analysis
+local function analyzeResults(times, iterations)
+    -- Initial pass for basic stats
+    local total, min, max = 0, huge, 0
+    for i = 1, iterations do
+        local t = times[i]
+        total = total + t
+        if t < min then min = t end
+        if t > max then max = t end
+    end
+    local avg = total / iterations
+    
+    -- Sort for percentiles
+    sort(times)
+    
+    -- Calculate percentiles
+    local percentiles = {}
+    for _, p in ipairs({0.5, 0.9, 0.95, 0.99, 0.999, 0.9999}) do
+        local index = ceil(iterations * p)
+        percentiles[p*100] = times[index]
+    end
+    
+    -- Calculate variance and deviation
+    local sumSqDiff, sumAbsDiff = 0, 0
+    for i = 1, iterations do
+        local diff = times[i] - avg
+        sumSqDiff = sumSqDiff + diff * diff
+        sumAbsDiff = sumAbsDiff + math.abs(diff)
+    end
+    
+    local variance = sumSqDiff / iterations
+    local stdev = sqrt(variance)
+    local mad = sumAbsDiff / iterations
+    
+    return {
+        iterations = iterations,
+        totalTime = total,
+        average = avg,
+        minimum = min,
+        maximum = max,
+        median = percentiles[50],
+        percentiles = percentiles,
+        variance = variance,
+        standardDeviation = stdev,
+        meanAbsDeviation = mad,
+        coefficientVariation = (avg > 0) and (stdev/avg)*100 or 0
+    }
 end
 
-local function formatTime(t)
-	if t < 1e-6 then
-		return (t * 1e9) .. " nanoseconds"
-	elseif t < 1e-3 then
-		return ceil(t * 1e6) .. " microseconds"
-	elseif t < 1 then
-		return ceil(t * 1e3) .. " ms"
-	else
-		return ("%0.3f s"):format(t)
-	end
+-- time formatting
+local timeUnits = {
+    {1e-9, "ns"},
+    {1e-6, "μs"},
+    {1e-3, "ms"},
+    {1, "s"},
+    {60, "min"},
+    {3600, "hr"}
+}
+
+local function formatDuration(seconds)
+    if seconds <= 0 then return "0s" end
+    
+    for i = #timeUnits, 1, -1 do
+        local unit = timeUnits[i]
+        if seconds >= unit[1] then
+            return string.format("%.3f%s", seconds/unit[1], unit[2])
+        end
+    end
+    return string.format("%.3gs", seconds)
 end
 
-local function printDivider()
-	print(string.rep("=", 40))
+-- result presentation
+local function printResults(testName, results)
+    local divider = "═"..string.rep("═", 38).."═"
+    
+    print(divider)
+    print(string.format("║ %-38s ║", "RESULTS: "..testName))
+    print(divider)
+    
+    local function printRow(label, value)
+        print(string.format("║ %-20s %16s ║", label..":", value))
+    end
+    
+    printRow("Iterations", tostring(results.iterations))
+    printRow("Total Time", formatDuration(results.totalTime))
+    printRow("Average", formatDuration(results.average))
+    printRow("Minimum", formatDuration(results.minimum))
+    printRow("Maximum", formatDuration(results.maximum))
+    printRow("Median", formatDuration(results.median))
+    print(divider)
+    printRow("Standard Deviation", formatDuration(results.standardDeviation))
+    printRow("Variance", formatDuration(results.variance))
+    printRow("Mean Abs Dev", formatDuration(results.meanAbsDeviation))
+    printRow("Coef of Variation", string.format("%.2f%%", results.coefficientVariation))
+    print(divider)
+    
+    for p, v in pairs(results.percentiles) do
+        printRow(p.."th Percentile", formatDuration(v))
+    end
+    
+    print(divider)
+    print(string.format("║ %-38s ║", "Iterations/sec: "..formatDuration(results.iterations/results.totalTime)))
+    print(divider.."\n")
 end
 
-local function sendNotification(title, text, duration)
-	local StarterGui = game:GetService("StarterGui")
-	StarterGui:SetCore("SendNotification", {
-		Title = title,
-		Text = text,
-		Duration = duration or 5,
-	})
-end
-
-local function testScriptLoading(url)
-	local startTime = tick()
-	local response = game:HttpGet(url)
-	local loadedFunc, err = loadstring(response)
-	if not loadedFunc then error("Loadstring error: " .. err) end
-	local env = {}
-	setmetatable(env, {__index = _G})
-	setfenv(loadedFunc, env)
-	local success, result = pcall(loadedFunc)
-	local endTime = tick()
-	return endTime - startTime, env
-end
-
-local function unloadScript(env)
-	for k in pairs(env) do
-		env[k] = nil
-	end
-	env = nil
-	collectgarbage("collect")
-end
-
+-- Main execution flow
 local function main()
-	local executorName = (identifyexecutor and identifyexecutor() or "Unknown Executor")
-	log("✅ Detected Executor: " .. executorName)
-	log(("Measuring tick() overhead over %d iterations..."):format(config.overheadIterations))
-	local tickOverhead = measureTickOverhead(config.overheadIterations)
-	log(("✅ Tick() overhead per call: %.9f seconds"):format(tickOverhead))
-	log(("Warming up with %d iterations..."):format(config.warmupIterations))
-	runWarmup(config.warmupIterations)
-	log("Get ready for the performance test!")
-	for i = 3, 1, -1 do
-		log(tostring(i))
-	end
-	log("Go!")
-	log(("Starting performance test with %d iterations..."):format(config.testIterations))
-	local progressInterval = floor(config.testIterations / config.progressIntervalFactor)
-	local success, times, totalTestTime = pcall(function()
-		return runTest(config.testIterations, tickOverhead, progressInterval)
-	end)
-	if not success then
-		log("❌ Test failed! Reason: " .. times)
-		return
-	end
-	local stats = computeStats(times, config.testIterations)
-	printDivider()
-	log("✅ RESULTS")
-	printDivider()
-	log("Average Time:             " .. formatTime(stats.avgTime))
-	log("Median Time:              " .. formatTime(stats.medianTime))
-	log("Minimum Time:             " .. formatTime(stats.minTime))
-	log("Maximum Time:             " .. formatTime(stats.maxTime))
-	log("90th Percentile:          " .. formatTime(stats.p90Time))
-	log("95th Percentile:          " .. formatTime(stats.p95Time))
-	log("99th Percentile:          " .. formatTime(stats.p99Time))
-	log("99.9th Percentile:        " .. formatTime(stats.p999Time))
-	log("Standard Deviation:       " .. formatTime(stats.stdev))
-	log("Mean Absolute Deviation:  " .. formatTime(stats.mad))
-	log(("Coefficient of Variation: %.2f%%"):format(stats.coeffVariation))
-	log(("Total Test Duration:      %.3f s"):format(totalTestTime))
-	log(("Iterations per Second:    %.2f"):format(config.testIterations / totalTestTime))
-	printDivider()
-	log("✅ Performance test complete!")
-	sendNotification("Check console", "Execution test finished", 5)
-	log("Testing external script loading...")
-	for i = 3, 1, -1 do
-		log(tostring(i))
-	end
-	log("Loading external script...")
-	local scriptUrl = "https://raw.githubusercontent.com/DarkNetworks/Infinite-Yield/main/latest.lua"
-	local loadTime, scriptEnv = testScriptLoading(scriptUrl)
-	log("External script loaded in: " .. formatTime(loadTime))
-	unloadScript(scriptEnv)
-	log("External script unloaded.")
-	sendNotification("Check console", "External script test complete", 5)
-	log("✅ Test made by notdefinity - Join the Discord: https://discord.gg/qeFQ57eqtj")
+    -- Set thread priority if supported
+    if setthreadpriority then
+        setthreadpriority(config.priority)
+    end
+    
+    -- Measure environment
+    log("🚀 Starting performance evaluation", true)
+    log("Environment: "..(identifyexecutor and identifyexecutor() or "Unknown"))
+    
+    -- Measure tick 
+    log("⏱️ Measuring tick() overhead...")
+    local tickAvg, tickMin = measureTickOverhead(config.overheadIterations)
+    log(string.format("✅ Tick overhead: avg=%s min=%s", 
+        formatDuration(tickAvg), formatDuration(tickMin)))
+    
+    -- garbage collection
+    if config.gcBeforeTest then
+        log("🧹 Running garbage collection...", true)
+        collectgarbage("collect")
+    end
+    
+    -- warmup sequence
+    log("🔥 Warming up ("..config.warmupIterations.." iterations)")
+    runWarmup(config.warmupIterations)
+    
+    -- Run all test cases
+    for _, testCase in ipairs(testCases) do
+        log("\n🧪 Testing: "..testCase.name)
+        local times, duration = runTest(testCase, config.testIterations, tickAvg)
+        local results = analyzeResults(times, config.testIterations)
+        printResults(testCase.name, results)
+    end
+    
+    -- Final
+    log("🎉 All tests completed!")
+    if setclipboard then
+        setclipboard("Performance tests completed at: "..os.date())
+        log("📋 Results timestamp copied to clipboard")
+    end
 end
 
-main()
+-- Error handling
+local success, err = pcall(main)
+if not success then
+    print("❌ Critical error:", err)
+    if sendNotification then
+        sendNotification("Test Failed", "Check console for errors", 10)
+    end
+end
